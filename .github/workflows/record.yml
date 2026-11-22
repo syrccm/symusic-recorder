@@ -1,0 +1,181 @@
+name: record
+run-name: "녹음 ${{ inputs.session_id }} ${{ inputs.title }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_url:
+        description: "유튜브 라이브 주소 (비우면 리포 변수 LIVE_URL)"
+        required: false
+        type: string
+        default: ""
+      max_minutes:
+        description: "최대 녹음 시간(분). 비우면 리포 변수 MAX_MINUTES, 그것도 없으면 120"
+        required: false
+        type: string
+        default: ""
+      session_id:
+        description: "세션 id (앱이 생성. 영문·숫자·-·_ 만)"
+        required: true
+        type: string
+      title:
+        description: "제목 (선택)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+# 동시에 1건만 녹음한다. 진행 중인 녹음은 취소하지 않는다.
+concurrency:
+  group: record
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SESSION_ID: ${{ inputs.session_id }}
+      TITLE: ${{ inputs.title }}
+      LIVE_URL: ${{ inputs.live_url || vars.LIVE_URL }}
+      MAX_MINUTES: ${{ inputs.max_minutes || vars.MAX_MINUTES || '120' }}
+      YTDLP_FORMAT: ${{ vars.YTDLP_FORMAT || 'bestaudio/best' }}
+      YTDLP_EXTRA_ARGS: ${{ vars.YTDLP_EXTRA_ARGS }}
+      OUT: out.mp3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # yt-dlp 의 유튜브 추출에 JS 런타임이 필요하다.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: ffmpeg · yt-dlp 설치
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install --quiet --upgrade "yt-dlp[default]"
+          ffmpeg -version | head -n 1
+          yt-dlp --version
+          deno --version | head -n 1
+
+      - name: 입력 확인 · 키 준비
+        run: |
+          if ! [[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
+            echo "::error::session_id 는 영문·숫자·-·_ 1~64자여야 합니다."
+            exit 1
+          fi
+          if [ -z "$LIVE_URL" ]; then
+            echo "::error::live_url 입력과 리포 변수 LIVE_URL 이 모두 비어 있습니다."
+            exit 1
+          fi
+          if ! [[ "$MAX_MINUTES" =~ ^[0-9]+$ ]] || [ "$MAX_MINUTES" -lt 1 ]; then
+            echo "::error::max_minutes 값이 올바르지 않습니다: $MAX_MINUTES"
+            exit 1
+          fi
+          # 업로드 시간을 남기기 위해 job timeout(360분)보다 짧게 제한
+          if [ "$MAX_MINUTES" -gt 330 ]; then
+            echo "::warning::max_minutes 를 330 으로 제한합니다."
+            MAX_MINUTES=330
+          fi
+          {
+            echo "MAX_MINUTES=$MAX_MINUTES"
+            echo "STARTED_AT=$(TZ=Asia/Seoul date +%Y-%m-%dT%H:%M:%S+09:00)"
+            echo "KEY_BASE=recordings/$(TZ=Asia/Seoul date +%Y-%m-%d_%H%M)_${SESSION_ID}"
+          } >>"$GITHUB_ENV"
+
+      - name: 녹음
+        id: rec
+        env:
+          # 기본 토큰으로 변수 조회가 403 이면 GH_VARS_TOKEN(Variables: read PAT)을 등록한다.
+          GH_TOKEN: ${{ secrets.GH_VARS_TOKEN || github.token }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            export YT_COOKIES_FILE="$RUNNER_TEMP/cookies.txt"
+            ( umask 077; printf '%s\n' "$YT_COOKIES" >"$YT_COOKIES_FILE" )
+          fi
+          unset YT_COOKIES
+          bash scripts/record.sh
+
+      # 녹음이 실패·취소돼도 부분 mp3 가 있으면 올린다.
+      - name: R2 업로드
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          REC_OUTCOME: ${{ steps.rec.outcome }}
+          REC_DURATION: ${{ steps.rec.outputs.duration_sec }}
+          REC_STOP_REASON: ${{ steps.rec.outputs.stop_reason }}
+        run: |
+          rm -f "$RUNNER_TEMP/cookies.txt"
+          if [ ! -s "$OUT" ]; then
+            echo "::warning::업로드할 mp3 가 없습니다."
+            exit 0
+          fi
+          if [ -z "${KEY_BASE:-}" ]; then
+            echo "::error::키가 준비되지 않았습니다."
+            exit 1
+          fi
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_BUCKET" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "::error::R2 시크릿(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET)이 비어 있습니다."
+            exit 1
+          fi
+
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          BYTES="$(stat -c %s "$OUT")"
+          DURATION="$REC_DURATION"
+          if ! [[ "$DURATION" =~ ^[0-9]+$ ]]; then
+            RAW="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT" 2>/dev/null || true)"
+            DURATION="$(awk -v d="${RAW:-0}" 'BEGIN { printf "%d", d + 0.5 }')"
+          fi
+          if [ "$REC_OUTCOME" = "success" ]; then STATUS=complete; else STATUS=partial; fi
+
+          # S3 메타데이터는 ASCII 만 허용 → 제목은 퍼센트 인코딩(앞 100자)
+          META="duration=${DURATION},bytes=${BYTES}"
+          if [ -n "$TITLE" ]; then
+            TITLE_META="$(jq -rn --arg t "$TITLE" '$t[0:100] | @uri')"
+            META="title=${TITLE_META},${META}"
+          fi
+
+          aws s3 cp "$OUT" "s3://${R2_BUCKET}/${KEY_BASE}.mp3" \
+            --endpoint-url "$ENDPOINT" \
+            --content-type audio/mpeg \
+            --metadata "$META" \
+            --no-progress
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg started_at "$STARTED_AT" \
+            --arg session_id "$SESSION_ID" \
+            --arg key "${KEY_BASE}.mp3" \
+            --arg status "$STATUS" \
+            --arg stop_reason "$REC_STOP_REASON" \
+            --argjson duration_sec "$DURATION" \
+            --argjson bytes "$BYTES" \
+            '{title: $title, started_at: $started_at, duration_sec: $duration_sec, bytes: $bytes,
+              session_id: $session_id, key: $key, status: $status, stop_reason: $stop_reason}' \
+            >sidecar.json
+
+          aws s3 cp sidecar.json "s3://${R2_BUCKET}/${KEY_BASE}.json" \
+            --endpoint-url "$ENDPOINT" \
+            --content-type "application/json; charset=utf-8" \
+            --no-progress
+
+          {
+            echo "### 업로드 완료 ($STATUS)"
+            echo "- 키: \`${KEY_BASE}.mp3\`"
+            echo "- 길이: ${DURATION}초, 용량: ${BYTES} bytes"
+          } >>"$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,7 @@
+# 녹음 결과물
+*.mp3
+*.json
+
+# 로컬 환경
+.env
+cookies.txt
