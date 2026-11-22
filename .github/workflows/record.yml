@@ -5,21 +5,36 @@ on:
   workflow_dispatch:
     inputs:
       live_url:
-        description: "유튜브 라이브 주소 (비우면 리포 변수 LIVE_URL)"
+        description: "유튜브 라이브 주소 (비우면 리포 변수 LIVE_URL). video_id 가 있으면 무시"
         required: false
         type: string
         default: ""
       max_minutes:
-        description: "최대 녹음 시간(분). 비우면 리포 변수 MAX_MINUTES, 그것도 없으면 120"
+        description: "녹음 시작 후 최대 녹음 시간(분). 비우면 리포 변수 MAX_MINUTES, 그것도 없으면 120"
         required: false
         type: string
         default: ""
       session_id:
-        description: "세션 id (앱이 생성. 영문·숫자·-·_ 만)"
+        description: "세션 id (앱·발사기가 생성. 영문·숫자·-·_ 만)"
         required: true
         type: string
       title:
         description: "제목 (선택)"
+        required: false
+        type: string
+        default: ""
+      video_id:
+        description: "유튜브 영상 id (선택). 있으면 https://www.youtube.com/watch?v={id} 를 녹음"
+        required: false
+        type: string
+        default: ""
+      wait_minutes:
+        description: "라이브 시작을 기다릴 최대 시간(분). 0 이면 기다리지 않고 바로 녹음"
+        required: false
+        type: string
+        default: "0"
+      reservation_id:
+        description: "예약 id (선택, 기록용)"
         required: false
         type: string
         default: ""
@@ -40,7 +55,10 @@ jobs:
     env:
       SESSION_ID: ${{ inputs.session_id }}
       TITLE: ${{ inputs.title }}
+      VIDEO_ID: ${{ inputs.video_id }}
+      RESERVATION_ID: ${{ inputs.reservation_id }}
       LIVE_URL: ${{ inputs.live_url || vars.LIVE_URL }}
+      WAIT_MINUTES: ${{ inputs.wait_minutes || '0' }}
       MAX_MINUTES: ${{ inputs.max_minutes || vars.MAX_MINUTES || '120' }}
       YTDLP_FORMAT: ${{ vars.YTDLP_FORMAT || 'bestaudio/best' }}
       YTDLP_EXTRA_ARGS: ${{ vars.YTDLP_EXTRA_ARGS }}
@@ -72,20 +90,37 @@ jobs:
             echo "::error::session_id 는 영문·숫자·-·_ 1~64자여야 합니다."
             exit 1
           fi
-          if [ -z "$LIVE_URL" ]; then
-            echo "::error::live_url 입력과 리포 변수 LIVE_URL 이 모두 비어 있습니다."
+          if [ -n "$VIDEO_ID" ] && ! [[ "$VIDEO_ID" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
+            echo "::error::video_id 형식이 올바르지 않습니다."
+            exit 1
+          fi
+          if [ -n "$RESERVATION_ID" ] && ! [[ "$RESERVATION_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
+            echo "::error::reservation_id 는 영문·숫자·-·_ 1~64자여야 합니다."
+            exit 1
+          fi
+          if [ -z "$VIDEO_ID" ] && [ -z "$LIVE_URL" ]; then
+            echo "::error::video_id, live_url 입력과 리포 변수 LIVE_URL 이 모두 비어 있습니다."
             exit 1
           fi
           if ! [[ "$MAX_MINUTES" =~ ^[0-9]+$ ]] || [ "$MAX_MINUTES" -lt 1 ]; then
             echo "::error::max_minutes 값이 올바르지 않습니다: $MAX_MINUTES"
             exit 1
           fi
-          # 업로드 시간을 남기기 위해 job timeout(360분)보다 짧게 제한
-          if [ "$MAX_MINUTES" -gt 330 ]; then
-            echo "::warning::max_minutes 를 330 으로 제한합니다."
-            MAX_MINUTES=330
+          if ! [[ "$WAIT_MINUTES" =~ ^[0-9]+$ ]]; then
+            echo "::error::wait_minutes 값이 올바르지 않습니다: $WAIT_MINUTES"
+            exit 1
+          fi
+          # 업로드 시간을 남기기 위해 대기 + 녹음을 job timeout(360분)보다 짧은 330분으로 제한
+          if [ "$WAIT_MINUTES" -gt 180 ]; then
+            echo "::warning::wait_minutes 를 180 으로 제한합니다."
+            WAIT_MINUTES=180
+          fi
+          if [ $((WAIT_MINUTES + MAX_MINUTES)) -gt 330 ]; then
+            MAX_MINUTES=$((330 - WAIT_MINUTES))
+            echo "::warning::대기 + 녹음이 330분을 넘어 max_minutes 를 ${MAX_MINUTES} 으로 제한합니다."
           fi
           {
+            echo "WAIT_MINUTES=$WAIT_MINUTES"
             echo "MAX_MINUTES=$MAX_MINUTES"
             echo "STARTED_AT=$(TZ=Asia/Seoul date +%Y-%m-%dT%H:%M:%S+09:00)"
             echo "KEY_BASE=recordings/$(TZ=Asia/Seoul date +%Y-%m-%d_%H%M)_${SESSION_ID}"
@@ -97,6 +132,15 @@ jobs:
           # 기본 토큰으로 변수 조회가 403 이면 GH_VARS_TOKEN(Variables: read PAT)을 등록한다.
           GH_TOKEN: ${{ secrets.GH_VARS_TOKEN || github.token }}
           YT_COOKIES: ${{ secrets.YT_COOKIES }}
+          # 진행 상태(state/current.json) 기록용. record.sh 가 yt-dlp 에는 넘기지 않는다.
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -n "$YT_COOKIES" ]; then
             export YT_COOKIES_FILE="$RUNNER_TEMP/cookies.txt"
@@ -163,10 +207,14 @@ jobs:
             --arg key "${KEY_BASE}.mp3" \
             --arg status "$STATUS" \
             --arg stop_reason "$REC_STOP_REASON" \
+            --arg video_id "$VIDEO_ID" \
+            --arg reservation_id "$RESERVATION_ID" \
             --argjson duration_sec "$DURATION" \
             --argjson bytes "$BYTES" \
             '{title: $title, started_at: $started_at, duration_sec: $duration_sec, bytes: $bytes,
-              session_id: $session_id, key: $key, status: $status, stop_reason: $stop_reason}' \
+              session_id: $session_id, key: $key, status: $status, stop_reason: $stop_reason,
+              video_id: (if $video_id == "" then null else $video_id end),
+              reservation_id: (if $reservation_id == "" then null else $reservation_id end)}' \
             >sidecar.json
 
           aws s3 cp sidecar.json "s3://${R2_BUCKET}/${KEY_BASE}.json" \
@@ -179,3 +227,31 @@ jobs:
             echo "- 키: \`${KEY_BASE}.mp3\`"
             echo "- 길이: ${DURATION}초, 용량: ${BYTES} bytes"
           } >>"$GITHUB_STEP_SUMMARY"
+
+      # 진행 상태 파일은 이 실행의 것일 때만 지운다(성공·실패·취소 모두).
+      - name: 진행 상태 파일 정리
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_BUCKET" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            exit 0
+          fi
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          if ! aws s3 cp "s3://${R2_BUCKET}/state/current.json" current.json --endpoint-url "$ENDPOINT" --only-show-errors 2>/dev/null; then
+            echo "상태 파일이 없습니다."
+            exit 0
+          fi
+          OWNER="$(jq -r '.session_id // ""' current.json 2>/dev/null || true)"
+          if [ "$OWNER" = "$SESSION_ID" ]; then
+            aws s3 rm "s3://${R2_BUCKET}/state/current.json" --endpoint-url "$ENDPOINT" --only-show-errors
+            echo "상태 파일을 지웠습니다."
+          else
+            echo "상태 파일이 다른 세션의 것이라 그대로 둡니다."
+          fi
