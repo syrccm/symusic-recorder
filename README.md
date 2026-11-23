@@ -288,7 +288,7 @@ yt-dlp 로그에 `Sign in to confirm you're not a bot` 등이 보이고 녹음�
 ## 60일 비활성화 대비
 
 공개 리포는 60일간 커밋이 없으면 GitHub 가 `schedule` 워크플로를 자동으로 끈다.
-발사기는 실행 때마다(schedule·Worker·수동 모두) 마지막 커밋 날짜를 보고 **50일을 넘겼으면 빈 커밋**(`chore: 예약 워크플로 유지…`)을 `main` 에 올린다.
+발사기는 실행 때마다(schedule·Worker·수동 모두, 모의 실행 제외) 마지막 커밋 날짜를 보고 **50일을 넘겼으면 빈 커밋**(`chore: 예약 워크플로 유지…`)을 `main` 에 올린다.
 그래도 꺼졌다면 Actions 탭 → dispatcher → **Enable workflow** 로 다시 켠다.
 
 ## R2 수명 주기
