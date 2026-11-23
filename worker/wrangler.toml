@@ -1,0 +1,11 @@
+# 발사기(dispatcher.yml)를 10분마다 깨우는 Cloudflare Worker.
+# 비밀: GH_PAT (wrangler secret put GH_PAT) — 이 리포의 Actions 쓰기 권한이 있는 토큰.
+name = "symusic-recorder-wake"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[observability]
+enabled = true

@@ -5,3 +5,7 @@
 # 로컬 환경
 .env
 cookies.txt
+
+# Cloudflare Worker
+worker/node_modules
+.wrangler/

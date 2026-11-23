@@ -14,6 +14,7 @@
 .github/workflows/dispatcher.yml  예약 발사기: 10분마다 예약 확인 · 예정 라이브 목록 갱신
 scripts/record.sh                 yt-dlp → ffmpeg 녹음 + 대기 + 정지 감시 + 진행 상태 기록
 scripts/dispatch.sh               예약 판정 · 녹음 실행 · 예약 파일 갱신
+worker/                           발사기를 10분마다 깨우는 Cloudflare Worker
 ```
 
 ## 녹음 (record.yml)
@@ -58,6 +59,17 @@ scripts/dispatch.sh               예약 판정 · 녹음 실행 · 예약 파�
 ## 예약 (dispatcher.yml)
 
 발사기는 약 10분마다 돌며 `scripts/dispatch.sh` 를 실행한다.
+
+발사기는 Cloudflare Worker 가 10분마다 깨운다. GitHub schedule 은 보조.
+Worker(`worker/`, 이름 `symusic-recorder-wake`)는 크론 `*/10 * * * *` 로 `dispatcher.yml` 의 `workflow_dispatch` 를 호출한다.
+둘이 겹쳐도 `concurrency: dispatcher` 가 동시에 도는 것을 막는다.
+
+```bash
+cd worker
+npx wrangler deploy            # 배포
+npx wrangler secret put GH_PAT # 이 리포의 Actions 쓰기 권한이 있는 토큰(값은 붙여넣기)
+npx wrangler tail              # 실시간 로그. 204 가 아니면 상태 코드와 본문 앞 200자가 오류로 남는다
+```
 
 1. R2 의 `reservations.json` 을 읽는다.
 2. 채널 `/streams` 탭에서 예정·진행 중 라이브를 읽어 `upcoming.json` 을 갱신한다. 채널 주소는 변수 `LIVE_URL`(`…/live`)에서 유도한다.
