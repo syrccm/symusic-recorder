@@ -23,12 +23,12 @@ scripts/dispatch.sh               예약 판정 · 녹음 실행 · 예약 파�
 | 입력 | 기본 | 설명 |
 | --- | --- | --- |
 | `session_id` | (필수) | 세션 id. 영문·숫자·`-`·`_` 1~64자 |
-| `title` | 비움 | 제목 |
-| `video_id` | 비움 | 유튜브 영상 id. 있으면 `https://www.youtube.com/watch?v={id}` 를 녹음 |
-| `live_url` | 비움 | `video_id` 가 없을 때 쓰는 주소. 비우면 리포 변수 `LIVE_URL` |
+| `title` | (아무것도 입력하지 않음) | 제목 |
+| `video_id` | (아무것도 입력하지 않음) | 유튜브 영상 id. 있으면 `https://www.youtube.com/watch?v={id}` 를 녹음 |
+| `live_url` | (아무것도 입력하지 않음) | `video_id` 가 없을 때 쓰는 주소. 비우면 리포 변수 `LIVE_URL` |
 | `wait_minutes` | `0` | 라이브 시작을 기다릴 최대 시간(분). `0` 이면 기다리지 않고 바로 녹음 |
-| `max_minutes` | 비움 | **녹음 시작 후** 최대 녹음 시간(분). 비우면 변수 `MAX_MINUTES`, 없으면 120 |
-| `reservation_id` | 비움 | 예약 id(기록용) |
+| `max_minutes` | (아무것도 입력하지 않음) | **녹음 시작 후** 최대 녹음 시간(분). 비우면 변수 `MAX_MINUTES`, 없으면 120 |
+| `reservation_id` | (아무것도 입력하지 않음) | 예약 id(기록용) |
 
 `wait_minutes` 는 180 까지, `wait_minutes + max_minutes` 는 330 까지로 제한된다(작업 제한 360분에서 업로드 시간을 뺀 값).
 

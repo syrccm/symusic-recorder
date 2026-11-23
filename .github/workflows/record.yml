@@ -5,12 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       live_url:
-        description: "유튜브 라이브 주소 (비우면 리포 변수 LIVE_URL). video_id 가 있으면 무시"
+        description: "유튜브 라이브 주소 (선택, 쓰지 않으면 아무것도 입력하지 않음 → 리포 변수 LIVE_URL). video_id 가 있으면 무시"
         required: false
         type: string
         default: ""
       max_minutes:
-        description: "녹음 시작 후 최대 녹음 시간(분). 비우면 리포 변수 MAX_MINUTES, 그것도 없으면 120"
+        description: "녹음 시작 후 최대 녹음 시간(분). (선택, 쓰지 않으면 아무것도 입력하지 않음 → 리포 변수 MAX_MINUTES, 그것도 없으면 120)"
         required: false
         type: string
         default: ""
@@ -19,12 +19,12 @@ on:
         required: true
         type: string
       title:
-        description: "제목 (선택)"
+        description: "제목 (선택, 쓰지 않으면 아무것도 입력하지 않음)"
         required: false
         type: string
         default: ""
       video_id:
-        description: "유튜브 영상 id (선택). 있으면 https://www.youtube.com/watch?v={id} 를 녹음"
+        description: "유튜브 영상 id (선택, 쓰지 않으면 아무것도 입력하지 않음). 있으면 https://www.youtube.com/watch?v={id} 를 녹음"
         required: false
         type: string
         default: ""
@@ -34,7 +34,7 @@ on:
         type: string
         default: "0"
       reservation_id:
-        description: "예약 id (선택, 기록용)"
+        description: "예약 id (선택, 기록용. 쓰지 않으면 아무것도 입력하지 않음)"
         required: false
         type: string
         default: ""
@@ -87,15 +87,15 @@ jobs:
       - name: 입력 확인 · 키 준비
         run: |
           if ! [[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
-            echo "::error::session_id 는 영문·숫자·-·_ 1~64자여야 합니다."
+            echo "::error::session_id 는 영문·숫자·-·_ 1~64자여야 합니다. 받은 값: [$SESSION_ID]"
             exit 1
           fi
           if [ -n "$VIDEO_ID" ] && ! [[ "$VIDEO_ID" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
-            echo "::error::video_id 형식이 올바르지 않습니다."
+            echo "::error::video_id 형식이 올바르지 않습니다. 받은 값: [$VIDEO_ID]"
             exit 1
           fi
           if [ -n "$RESERVATION_ID" ] && ! [[ "$RESERVATION_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
-            echo "::error::reservation_id 는 영문·숫자·-·_ 1~64자여야 합니다."
+            echo "::error::reservation_id 는 영문·숫자·-·_ 1~64자여야 합니다. 받은 값: [$RESERVATION_ID]"
             exit 1
           fi
           if [ -z "$VIDEO_ID" ] && [ -z "$LIVE_URL" ]; then
